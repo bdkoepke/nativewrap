@@ -30,6 +30,7 @@
 
 package edu.ncsu.nativewrap;
 
+import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -41,12 +42,24 @@ import java.io.OutputStream;
 import java.io.Writer;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 import kellinwood.security.zipsigner.ZipSigner;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.StrictMode;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.widget.Toast;
@@ -61,6 +74,11 @@ import android.graphics.Bitmap.CompressFormat;
 import android.graphics.Bitmap.Config;
 import android.graphics.drawable.BitmapDrawable;
 import org.apache.commons.io.FileUtils;
+import org.jsoup.Connection;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+
 import pxb.android.axml.AxmlVisitor;
 import pxb.android.axml.AxmlWriter;
 import pxb.android.axml.AxmlReader;
@@ -77,6 +95,157 @@ public class AppMakerActivity extends Activity {
 	static boolean setFavicon=true;
 	static Context context;
 	
+	private interface Predicate<T> { boolean apply(T x); }
+	private interface Function<T, R> { R apply(T x); }
+	private enum ImageFormat implements Comparable<ImageFormat> {
+		SVG("svg"), PNG("png"), JPG("jpg"), ICO("ico"), ICNS("icns"), INVALID("invalid");
+
+		private static final Map<String, ImageFormat> extensions = new HashMap<String, ImageFormat>();
+		static {
+			for (ImageFormat i : ImageFormat.values())
+				extensions.put(i.extension(), i);
+		}
+		private final String extension;
+		ImageFormat(String extension) { this.extension = extension; }
+		public String extension() { return extension; }
+		public static ImageFormat from(String extension) {
+			return extensions.containsKey(extension) ? extensions.get(extension) : INVALID;
+		}
+	};
+	private enum RelTag {
+		APPLE_TOUCH_ICON("apple-touch-icon"),
+		APPLE_TOUCH_ICON_PRECOMPOSED("apple-touch-icon-precomposed"),
+		SHORTCUT_ICON("shortcut icon"),
+		ICON("icon");
+
+		private static final Set<String> tags = new HashSet<String>();
+		static {
+			for (RelTag r : EnumSet.allOf(RelTag.class))
+				tags.add(r.tag());
+		}
+		private final String tag;
+		RelTag(String tag) { this.tag = tag; }
+		public String tag() { return tag; }
+		public static boolean contains(String tag) { return tags.contains(tag); }
+	};
+	private static class Tuple<T, R> {
+		private final T first;
+		private final R second;
+		Tuple(T first, R second) {
+			this.first = first;
+			this.second = second;
+		}
+		public T first() { return first; }
+		public R second() { return second; }
+		public static <T, R> Tuple<T, R> of(T first, R second) {
+			return new Tuple<T, R>(first, second);
+		}
+	}
+
+	private static <T> List<T> filter(Iterable<T> xs, Predicate<T> p) {
+		List<T> xs_ = new ArrayList<T>();
+		for (T x : xs)
+			if (p.apply(x))
+				xs_.add(x);
+		return xs_;
+	}
+	private static <T, R> List<R> map(Iterable<T> xs, Function<T, R> f) {
+		List<R> xs_ = new ArrayList<R>();
+		for (T x : xs)
+			xs_.add(f.apply(x));
+		return xs_;
+	}
+
+	private static String ensureAbsoluteURL(String protocol, String host, String maybeRelative) {
+		return maybeRelative.startsWith(protocol) ?
+				maybeRelative :
+				String.format("%s://%s", protocol, String.format("%s/%s", host, maybeRelative).replace("//", "/"));
+	}
+	private static String getExtension(String url) {
+		int i = url.lastIndexOf('.');
+		return i == 0 ? "" : url.substring(i + 1);
+	}
+	private static String join(char delimiter, List<String> xs) {
+		StringBuilder r = new StringBuilder();
+		int i;
+		for (i = 0; i < (xs.size() - 1); i++)
+			r.append(xs.get(i)).append(delimiter);
+		if (i != (xs.size() - 1))
+			r.append(xs.get(i));
+		return r.toString();
+	}
+
+	private static Connection newConnection(String url) {
+		final String userAgent = "Mozilla/5.0 (Linux; Android 4.4; Nexus 5 Build/_BuildID_) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/30.0.0.0 Mobile Safari/537.36";
+		return Jsoup
+				.connect(url)
+				.userAgent(userAgent)
+				.validateTLSCertificates(false)
+				.followRedirects(true);
+	}
+
+	private static String getFaviconURL(URL url) {
+		final String protocol = url.getProtocol();
+		final String host = url.getHost();
+		String url_ = protocol + "://" + host;
+		String defaultFaviconURL = String.format("%s/favicon.ico", url_);
+		Document index;
+		try {
+			index = newConnection(String.format("%s%s", url_, url.getPath())).get();
+			defaultFaviconURL = String.format("%s/favicon.ico", newConnection(url_).execute().url());
+		} catch (IOException e) {
+			System.out.println("Error getting favicon, reverting to default.");
+			return defaultFaviconURL;
+		}
+
+		String imageFormats = join('|', map(Arrays.asList(ImageFormat.values()), new Function<ImageFormat, String>() {
+			@Override public String apply(ImageFormat x) { return x.extension(); }}));
+		Collection<Element> links = filter(
+				index.select(String.format("link[rel*=icon][href~=.*\\.(%s)]", imageFormats)),
+				new Predicate<Element>() {
+							public boolean apply(Element x) {
+								return RelTag.contains(x.attr("rel"));
+							}
+						});
+		List<String> urls = map(links,
+				new Function<Element, String>() {
+					public String apply(Element e) { return ensureAbsoluteURL(protocol, host, e.attr("href")); }
+				});
+		List<Tuple<Integer, String>> urlMap = map(urls, new Function<String, Tuple<Integer, String>>() {
+			public Tuple<Integer, String> apply(String url) {
+				int d;
+				try {
+					System.out.println(url);
+					BufferedInputStream b = new BufferedInputStream(new URL(url).openStream());
+					Bitmap m = BitmapFactory.decodeStream(b);
+					b.close();
+					d = ((m == null) ? -1 : m.getWidth() * m.getHeight());
+				} catch (IOException e) {
+					d = -1;
+				}
+				return Tuple.of(d, url);
+			}
+		});
+		Collections.sort(urlMap, new Comparator<Tuple<Integer, String>>() {
+			public int compare(Tuple<Integer, String> a, Tuple<Integer, String> b) {
+				int format = ImageFormat.from(getExtension(a.second())).compareTo(ImageFormat.from(getExtension(b.second())));
+				return format == 0 ? a.first() - b.first() : format;
+			}
+		});
+		urls = map(filter(urlMap, new Predicate<Tuple<Integer, String>>() {
+			@Override
+			public boolean apply(Tuple<Integer, String> x) {
+				return x.first() >= 0;
+			}
+		}), new Function<Tuple<Integer, String>, String>() {
+			public String apply(Tuple<Integer, String> t) {
+				return t.second();
+			}
+		});
+		urls.add(String.format("%s/favicon.ico", url_));
+		return urls.get(0);
+	}
+
 	protected void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
 		context=this;
@@ -136,7 +305,9 @@ public class AppMakerActivity extends Activity {
 			{
 				try{
 					URL receivedURL = new URL(received_intent.getStringExtra("url"));
-					URL url = new URL(receivedURL.getProtocol()+"://"+receivedURL.getHost()+"/favicon.ico");
+					StrictMode.ThreadPolicy policy = new StrictMode.ThreadPolicy.Builder().permitAll().build();
+					StrictMode.setThreadPolicy(policy);
+					URL url = new URL(getFaviconURL(receivedURL));
 					System.out.println("GETTING BITMAP");
 					Bitmap favicon = getBitmapFromURL(url);	
 					iconFiles = new File[4];
