@@ -187,30 +187,25 @@ public class AppMakerActivity extends Activity {
 	private static String getFaviconURL(URL url) {
 		final String protocol = url.getProtocol();
 		final String host = url.getHost();
-		String url_ = protocol + "://" + host;
-		String defaultFaviconURL = String.format("%s/favicon.ico", url_);
+		final String url_ = protocol + "://" + host;
+		String defaultFaviconURL;
 		Document index;
 		try {
 			index = newConnection(String.format("%s%s", url_, url.getPath())).get();
 			defaultFaviconURL = String.format("%s/favicon.ico", newConnection(url_).execute().url());
 		} catch (IOException e) {
 			System.out.println("Error getting favicon, reverting to default.");
-			return defaultFaviconURL;
+			return String.format("%s/favicon.ico", url_);
 		}
 
-		String imageFormats = join('|', map(Arrays.asList(ImageFormat.values()), new Function<ImageFormat, String>() {
-			@Override public String apply(ImageFormat x) { return x.extension(); }}));
+		String imageFormats = join('|', map(Arrays.asList(ImageFormat.values()),
+						new Function<ImageFormat, String>() { public String apply(ImageFormat x) { return x.extension(); }}));
 		Collection<Element> links = filter(
 				index.select(String.format("link[rel*=icon][href~=.*\\.(%s)]", imageFormats)),
-				new Predicate<Element>() {
-							public boolean apply(Element x) {
-								return RelTag.contains(x.attr("rel"));
-							}
-						});
+				new Predicate<Element>() { public boolean apply(Element x) { return RelTag.contains(x.attr("rel")); }});
 		List<String> urls = map(links,
 				new Function<Element, String>() {
-					public String apply(Element e) { return ensureAbsoluteURL(protocol, host, e.attr("href")); }
-				});
+					public String apply(Element e) { return ensureAbsoluteURL(protocol, host, e.attr("href")); }};
 		List<Tuple<Integer, String>> urlMap = map(urls, new Function<String, Tuple<Integer, String>>() {
 			public Tuple<Integer, String> apply(String url) {
 				int d;
@@ -232,16 +227,9 @@ public class AppMakerActivity extends Activity {
 				return format == 0 ? a.first() - b.first() : format;
 			}
 		});
-		urls = map(filter(urlMap, new Predicate<Tuple<Integer, String>>() {
-			@Override
-			public boolean apply(Tuple<Integer, String> x) {
-				return x.first() >= 0;
-			}
-		}), new Function<Tuple<Integer, String>, String>() {
-			public String apply(Tuple<Integer, String> t) {
-				return t.second();
-			}
-		});
+		urls = map(filter(urlMap,
+			new Predicate<Tuple<Integer, String>>() { public boolean apply(Tuple<Integer, String> x) { return x.first() >= 0; } }),
+			new Function<Tuple<Integer, String>, String>() { public String apply(Tuple<Integer, String> t) { return t.second(); } });
 		urls.add(String.format("%s/favicon.ico", url_));
 		return urls.get(0);
 	}
