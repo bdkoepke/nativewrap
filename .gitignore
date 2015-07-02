@@ -1,0 +1,9 @@
+.idea/
+.gradle/
+gradle/
+nativewrap.iml
+build/
+gradlew
+gradlew.bat
+local.properties
+gen/

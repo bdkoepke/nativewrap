@@ -97,6 +97,7 @@ public class AppMakerActivity extends Activity {
 	
 	private interface Predicate<T> { boolean apply(T x); }
 	private interface Function<T, R> { R apply(T x); }
+	private interface BiFunction<T1, T2, R> { R apply(T1 x, T2 y); }
 	private enum ImageFormat implements Comparable<ImageFormat> {
 		SVG("svg"), PNG("png"), JPG("jpg"), ICO("ico"), ICNS("icns"), INVALID("invalid");
 
@@ -120,7 +121,7 @@ public class AppMakerActivity extends Activity {
 
 		private static final Set<String> tags = new HashSet<String>();
 		static {
-			for (RelTag r : EnumSet.allOf(RelTag.class))
+			for (RelTag r : RelTag.values())
 				tags.add(r.tag());
 		}
 		private final String tag;
@@ -155,6 +156,11 @@ public class AppMakerActivity extends Activity {
 			xs_.add(f.apply(x));
 		return xs_;
 	}
+	private static <T, R> R foldr(Iterable<T> xs, R y, BiFunction<T, R, R> f) {
+		for (T x_ : xs)
+			y = f.apply(x_, y);
+		return y;
+	}
 
 	private static String ensureAbsoluteURL(String protocol, String host, String maybeRelative) {
 		return maybeRelative.startsWith(protocol) ?
@@ -174,22 +180,34 @@ public class AppMakerActivity extends Activity {
 			r.append(xs.get(i));
 		return r.toString();
 	}
-
 	private static Connection newConnection(String url) {
 		final String userAgent = "Mozilla/5.0 (Linux; Android 4.4; Nexus 5 Build/_BuildID_) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/30.0.0.0 Mobile Safari/537.36";
 		return Jsoup
 				.connect(url)
 				.userAgent(userAgent)
-				.validateTLSCertificates(false)
 				.followRedirects(true);
 	}
+	private static int getImageArea(String url) {
+		try {
+			// Open the url and get a bitmap representation of
+			// the image housed there.
+			BufferedInputStream b = new BufferedInputStream(new URL(url).openStream());
+			Bitmap m = BitmapFactory.decodeStream(b);
+			b.close();
+			// Return a new tuple with the score represented as the area of the
+			// image.
+			return (m == null) ? -1 : m.getWidth() * m.getHeight();
+		} catch (IOException e) {
+			return -1;
+		}
+	}
 
-	private static String getFaviconURL(URL url) {
+	private static String getFaviconURL(final URL url) {
 		final String protocol = url.getProtocol();
 		final String host = url.getHost();
 		final String url_ = protocol + "://" + host;
-		String defaultFaviconURL;
-		Document index;
+		final String defaultFaviconURL;
+		final Document index;
 		try {
 			index = newConnection(String.format("%s%s", url_, url.getPath())).get();
 			defaultFaviconURL = String.format("%s/favicon.ico", newConnection(url_).execute().url());
@@ -198,40 +216,37 @@ public class AppMakerActivity extends Activity {
 			return String.format("%s/favicon.ico", url_);
 		}
 
-		String imageFormats = join('|', map(Arrays.asList(ImageFormat.values()),
+		// Get the acceptable image formats in regex format
+		// Will produce a list that looks like svg|png|ico
+		final String imageFormats = join('|', map(Arrays.asList(ImageFormat.values()),
 						new Function<ImageFormat, String>() { public String apply(ImageFormat x) { return x.extension(); }}));
-		Collection<Element> links = filter(
+		// Get the elements of links that contain an icon rel
+		// tag and have an acceptable image format as defined
+		// by the ImageFormat enum.
+		final Collection<Element> links = filter(
 				index.select(String.format("link[rel*=icon][href~=.*\\.(%s)]", imageFormats)),
 				new Predicate<Element>() { public boolean apply(Element x) { return RelTag.contains(x.attr("rel")); }});
-		List<String> urls = map(links,
+		// Now we want to get the absolute urls of the above elements
+		final List<String> urls = map(links,
 				new Function<Element, String>() {
-					public String apply(Element e) { return ensureAbsoluteURL(protocol, host, e.attr("href")); }};
-		List<Tuple<Integer, String>> urlMap = map(urls, new Function<String, Tuple<Integer, String>>() {
-			public Tuple<Integer, String> apply(String url) {
-				int d;
-				try {
-					System.out.println(url);
-					BufferedInputStream b = new BufferedInputStream(new URL(url).openStream());
-					Bitmap m = BitmapFactory.decodeStream(b);
-					b.close();
-					d = ((m == null) ? -1 : m.getWidth() * m.getHeight());
-				} catch (IOException e) {
-					d = -1;
-				}
-				return Tuple.of(d, url);
+					public String apply(Element e) { return ensureAbsoluteURL(protocol, host, e.attr("href")); }});
+		// Lastly we want to get the 'best' image available.
+		// The right fold here starts off with the original
+		// defaultFaviconURL and then prioritizes images first
+		// by image format (prefer svg to png, etc) and second
+		// by the area of the image obtained at that url.
+		return foldr(urls, Tuple.of(getImageArea(defaultFaviconURL), defaultFaviconURL), new BiFunction<String, Tuple<Integer, String>, Tuple<Integer, String>>() {
+			@Override
+			public Tuple<Integer, String> apply(String x, Tuple<Integer, String> y) {
+				int format = ImageFormat.from(getExtension(x)).compareTo(ImageFormat.from(getExtension(y.second())));
+				if (format < 0)
+					return y;
+				int area = getImageArea(x);
+				if (format > 0)
+					return area > 0 ? Tuple.of(area, x) : y;
+				return (area > y.first()) ? Tuple.of(area, x) : y;
 			}
-		});
-		Collections.sort(urlMap, new Comparator<Tuple<Integer, String>>() {
-			public int compare(Tuple<Integer, String> a, Tuple<Integer, String> b) {
-				int format = ImageFormat.from(getExtension(a.second())).compareTo(ImageFormat.from(getExtension(b.second())));
-				return format == 0 ? a.first() - b.first() : format;
-			}
-		});
-		urls = map(filter(urlMap,
-			new Predicate<Tuple<Integer, String>>() { public boolean apply(Tuple<Integer, String> x) { return x.first() >= 0; } }),
-			new Function<Tuple<Integer, String>, String>() { public String apply(Tuple<Integer, String> t) { return t.second(); } });
-		urls.add(String.format("%s/favicon.ico", url_));
-		return urls.get(0);
+		}).second();
 	}
 
 	protected void onCreate(Bundle savedInstanceState) {
