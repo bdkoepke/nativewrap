@@ -41,6 +41,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.Writer;
 import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -309,12 +310,22 @@ public class AppMakerActivity extends Activity {
 			{
 				try{
 					final URL receivedURL = new URL(received_intent.getStringExtra("url"));
-					final AsyncTask<Void, Void, String> task = new AsyncTask<Void, Void, String>() {
-						@Override protected String doInBackground(Void... voids) { return getFaviconURL(receivedURL); } };
-					task.execute();
-					final URL url = new URL(task.get());
+					final AsyncTask<Void, Void, Bitmap> task = new AsyncTask<Void, Void, Bitmap>() {
+						@Override protected Bitmap doInBackground(Void... voids) {
+							String s_url = getFaviconURL(receivedURL);
+							System.out.println("Getting url: "+s_url);
+							try {
+								URL url = new URL(s_url);
+								return getBitmapFromURL(url);
+							} catch (Exception e) {
+								System.out.println(e.getMessage());
+								return null;
+							}
+						}
+					};
 					System.out.println("GETTING BITMAP");
-					Bitmap favicon = getBitmapFromURL(url);	
+					task.execute();
+					Bitmap favicon = task.get();
 					iconFiles = new File[4];
 					Bitmap lowDensity = convertBitmap(context, favicon, DisplayMetrics.DENSITY_LOW);
 					writeBitmapToFile(getFilesDir()+"/ic_launcher_low.png",lowDensity);
