@@ -229,9 +229,19 @@ public class AppMakerActivity extends Activity {
 				index.select(String.format("link[rel*=icon][href~=.*\\.(%s)]", imageFormats)),
 				new Predicate<Element>() { public boolean apply(Element x) { return RelTag.contains(x.attr("rel")); }});
 		// Now we want to get the absolute urls of the above elements
-		final List<String> urls = map(links,
+		List<String> urls = map(links,
 				new Function<Element, String>() {
 					public String apply(Element e) { return ensureAbsoluteURL(protocol, host, e.attr("href")); }});
+		if (urls.size() == 0)
+			return defaultFaviconURL;
+		// Sort by the image format and then only search through
+		// the formats that are candidates for being the 'best'
+		// image.
+		Collections.sort(urls, new Comparator<String>() {
+			public int compare(String x1, String x2) { return ImageFormat.from(getExtension(x1)).compareTo(ImageFormat.from(getExtension(x2))); }});
+		final ImageFormat f = ImageFormat.from(urls.get(0));
+		urls = filter(urls, new Predicate<String>() {
+			public boolean apply(String x) { return f.compareTo(ImageFormat.from(getExtension(x))) == 0; } });
 		// Lastly we want to get the 'best' image available.
 		// The right fold here starts off with the original
 		// defaultFaviconURL and then prioritizes images first
@@ -240,12 +250,7 @@ public class AppMakerActivity extends Activity {
 		return foldr(urls, Tuple.of(getImageArea(defaultFaviconURL), defaultFaviconURL), new BiFunction<String, Tuple<Integer, String>, Tuple<Integer, String>>() {
 			@Override
 			public Tuple<Integer, String> apply(String x, Tuple<Integer, String> y) {
-				int format = ImageFormat.from(getExtension(x)).compareTo(ImageFormat.from(getExtension(y.second())));
-				if (format < 0)
-					return y;
 				int area = getImageArea(x);
-				if (format > 0)
-					return area > 0 ? Tuple.of(area, x) : y;
 				return (area > y.first()) ? Tuple.of(area, x) : y;
 			}
 		}).second();
