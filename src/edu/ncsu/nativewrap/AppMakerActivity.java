@@ -58,6 +58,7 @@ import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 import kellinwood.security.zipsigner.ZipSigner;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.StrictMode;
 import android.util.DisplayMetrics;
@@ -94,12 +95,12 @@ public class AppMakerActivity extends Activity {
 	static String logTag="NativeWrap";
 	static boolean setFavicon=true;
 	static Context context;
-	
+
 	private interface Predicate<T> { boolean apply(T x); }
 	private interface Function<T, R> { R apply(T x); }
 	private interface BiFunction<T1, T2, R> { R apply(T1 x, T2 y); }
 	private enum ImageFormat implements Comparable<ImageFormat> {
-		SVG("svg"), PNG("png"), JPG("jpg"), ICO("ico"), ICNS("icns"), INVALID("invalid");
+		INVALID("invalid"), ICNS("icns"), ICO("ico"), JPG("jpg"), PNG("png"), SVG("svg");
 
 		private static final Map<String, ImageFormat> extensions = new HashMap<String, ImageFormat>();
 		static {
@@ -219,7 +220,7 @@ public class AppMakerActivity extends Activity {
 		// Get the acceptable image formats in regex format
 		// Will produce a list that looks like svg|png|ico
 		final String imageFormats = join('|', map(Arrays.asList(ImageFormat.values()),
-						new Function<ImageFormat, String>() { public String apply(ImageFormat x) { return x.extension(); }}));
+				new Function<ImageFormat, String>() { public String apply(ImageFormat x) { return x.extension(); }}));
 		// Get the elements of links that contain an icon rel
 		// tag and have an acceptable image format as defined
 		// by the ImageFormat enum.
@@ -307,10 +308,11 @@ public class AppMakerActivity extends Activity {
 			if(setFavicon)
 			{
 				try{
-					URL receivedURL = new URL(received_intent.getStringExtra("url"));
-					StrictMode.ThreadPolicy policy = new StrictMode.ThreadPolicy.Builder().permitAll().build();
-					StrictMode.setThreadPolicy(policy);
-					URL url = new URL(getFaviconURL(receivedURL));
+					final URL receivedURL = new URL(received_intent.getStringExtra("url"));
+					final AsyncTask<Void, Void, String> task = new AsyncTask<Void, Void, String>() {
+						@Override protected String doInBackground(Void... voids) { return getFaviconURL(receivedURL); } };
+					task.execute();
+					final URL url = new URL(task.get());
 					System.out.println("GETTING BITMAP");
 					Bitmap favicon = getBitmapFromURL(url);	
 					iconFiles = new File[4];
