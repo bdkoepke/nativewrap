@@ -40,15 +40,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.Writer;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -61,7 +58,6 @@ import kellinwood.security.zipsigner.ZipSigner;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
-import android.os.StrictMode;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.widget.Toast;
@@ -131,17 +127,20 @@ public class AppMakerActivity extends Activity {
 		public String tag() { return tag; }
 		public static boolean contains(String tag) { return tags.contains(tag); }
 	};
-	private static class Tuple<T, R> {
+	private static class Triple<T, U, V> {
 		private final T first;
-		private final R second;
-		Tuple(T first, R second) {
+		private final U second;
+		private final V third;
+		Triple(T first, U second, V third) {
 			this.first = first;
 			this.second = second;
+			this.third = third;
 		}
 		public T first() { return first; }
-		public R second() { return second; }
-		public static <T, R> Tuple<T, R> of(T first, R second) {
-			return new Tuple<T, R>(first, second);
+		public U second() { return second; }
+		public V third() { return third; }
+		public static <T, U, V> Triple<T, U, V> of(T first, U second, V third) {
+			return new Triple<T, U, V>(first, second, third);
 		}
 	}
 
@@ -189,34 +188,32 @@ public class AppMakerActivity extends Activity {
 				.userAgent(userAgent)
 				.followRedirects(true);
 	}
-	private static int getImageArea(String url) {
-		try {
-			// Open the url and get a bitmap representation of
-			// the image housed there.
-			BufferedInputStream b = new BufferedInputStream(new URL(url).openStream());
-			Bitmap m = BitmapFactory.decodeStream(b);
-			b.close();
-			// Return a new tuple with the score represented as the area of the
-			// image.
-			return (m == null) ? -1 : m.getWidth() * m.getHeight();
-		} catch (IOException e) {
-			return -1;
-		}
+	private static Bitmap getBitmap(String url) throws IOException {
+		BufferedInputStream b = new BufferedInputStream(new URL(url).openStream());
+		Bitmap m = BitmapFactory.decodeStream(b);
+		b.close();
+		return m;
+	}
+	private static int getBitmapArea(Bitmap b) {
+		return (b == null) ? -1 : b.getWidth() * b.getHeight();
 	}
 
-	private static String getFaviconURL(final URL url) {
+	private static Bitmap getFaviconBitmap(final URL url) {
 		final String protocol = url.getProtocol();
 		final String host = url.getHost();
 		final String url_ = protocol + "://" + host;
-		final String defaultFaviconURL;
 		final Document index;
+		final String defaultFaviconURL;
+		Bitmap defaultBitmap = null;
 		try {
 			index = newConnection(String.format("%s%s", url_, url.getPath())).get();
 			defaultFaviconURL = String.format("%s/favicon.ico", newConnection(url_).execute().url());
 		} catch (IOException e) {
-			System.out.println("Error getting favicon, reverting to default.");
-			return String.format("%s/favicon.ico", url_);
+			return null;
 		}
+		try {
+			defaultBitmap = getBitmap(defaultFaviconURL);
+		} catch (IOException ignored) {}
 
 		// Get the acceptable image formats in regex format
 		// Will produce a list that looks like svg|png|ico
@@ -233,7 +230,7 @@ public class AppMakerActivity extends Activity {
 				new Function<Element, String>() {
 					public String apply(Element e) { return ensureAbsoluteURL(protocol, host, e.attr("href")); }});
 		if (urls.size() == 0)
-			return defaultFaviconURL;
+			return defaultBitmap;
 		// Sort by the image format and then only search through
 		// the formats that are candidates for being the 'best'
 		// image.
@@ -247,13 +244,22 @@ public class AppMakerActivity extends Activity {
 		// defaultFaviconURL and then prioritizes images first
 		// by image format (prefer svg to png, etc) and second
 		// by the area of the image obtained at that url.
-		return foldr(urls, Tuple.of(getImageArea(defaultFaviconURL), defaultFaviconURL), new BiFunction<String, Tuple<Integer, String>, Tuple<Integer, String>>() {
+		return foldr(urls, Triple.of(getBitmapArea(defaultBitmap),
+					ImageFormat.from(getExtension(defaultFaviconURL)),
+					defaultBitmap),
+				new BiFunction<String, Triple<Integer, ImageFormat, Bitmap>, Triple<Integer, ImageFormat, Bitmap>>() {
 			@Override
-			public Tuple<Integer, String> apply(String x, Tuple<Integer, String> y) {
-				int area = getImageArea(x);
-				return (area > y.first()) ? Tuple.of(area, x) : y;
+			public Triple<Integer, ImageFormat, Bitmap> apply(String x, Triple<Integer, ImageFormat, Bitmap> y) {
+				final Bitmap m;
+				try {
+					m = getBitmap(x);
+				} catch (IOException e) {
+					return y;
+				}
+				int area = getBitmapArea(m);
+				return (area > y.first()) ? Triple.of(area, ImageFormat.from(getExtension(x)), m) : y;
 			}
-		}).second();
+		}).third();
 	}
 
 	protected void onCreate(Bundle savedInstanceState) {
@@ -317,15 +323,12 @@ public class AppMakerActivity extends Activity {
 					final URL receivedURL = new URL(received_intent.getStringExtra("url"));
 					final AsyncTask<Void, Void, Bitmap> task = new AsyncTask<Void, Void, Bitmap>() {
 						@Override protected Bitmap doInBackground(Void... voids) {
-							String s_url = getFaviconURL(receivedURL);
-							System.out.println("Getting url: "+s_url);
-							try {
-								URL url = new URL(s_url);
-								return getBitmapFromURL(url);
-							} catch (Exception e) {
-								System.out.println(e.getMessage());
-								return null;
-							}
+							final Bitmap m = getFaviconBitmap(receivedURL);
+							if (m == null)
+								System.out.println("NULL BITMAP");
+							else
+								System.out.println("GOT BITMAP:"+m.getHeight()+"|"+m.getWidth());
+							return m;
 						}
 					};
 					System.out.println("GETTING BITMAP");
@@ -719,20 +722,8 @@ public class AppMakerActivity extends Activity {
 		}
 	}
 
-	//Extracting and formatting the favicons
-	public static Bitmap getBitmapFromURL(URL src) throws Exception {
-			URL url = src;
-	        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-	        connection.setDoInput(true);
-	        connection.connect();
-	        InputStream input = connection.getInputStream();
-	        Bitmap myBitmap = BitmapFactory.decodeStream(input);
-			System.out.println("GOT BITMAP:"+myBitmap.getHeight()+"|"+myBitmap.getWidth());
-	        return myBitmap;
-	}
-		
 	public static Bitmap convertBitmap(Context context, Bitmap favicon, int density){
-		Bitmap bitmap=null;
+		Bitmap bitmap;
 		BitmapDrawable drawable=new BitmapDrawable(context.getResources(),favicon);
 		//drawable.setTargetDensity(density);
 		int width=0,height=0;
